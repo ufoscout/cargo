@@ -39,6 +39,10 @@ pub enum Message {
         file: String,
         message: String,
     },
+    PreviewNotFound {
+        file: String,
+        edition: String,
+    },
 }
 
 impl Message {
@@ -113,6 +117,16 @@ impl Message {
                     writeln!(config.shell().err())?;
                 }
                 write!(config.shell().err(), "{}", PLEASE_REPORT_THIS_BUG)?;
+                Ok(())
+            }
+            Message::PreviewNotFound { file, edition } => {
+                config.shell().warn(&format!(
+                    "failed to find `#![feature(rust_{}_preview)]` in `{}`\n\
+                     this may cause `cargo fix` to not be able to fix all\n\
+                     issues in preparation for the {0} edition",
+                    edition,
+                    file,
+                ))?;
                 Ok(())
             }
         }
