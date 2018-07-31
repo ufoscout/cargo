@@ -20,8 +20,10 @@ use util::config::{self, Config};
 use util::errors::{CargoResult, CargoResultExt};
 use util::important_paths::find_root_manifest_for_wd;
 use util::paths;
+use util::FileLock;
 use util::ToUrl;
 use version;
+
 
 pub struct RegistryConfig {
     pub index: Option<String>,
@@ -41,19 +43,27 @@ pub struct PublishOpts<'cfg> {
 }
 
 pub fn publish(ws: &Workspace, opts: &PublishOpts) -> CargoResult<()> {
+    let mut packages : Vec<(Package, FileLock)> = vec![];
+
     match ws.current_opt() {
-        Some(_) => publish_package(ws, opts),
+        Some(_) => packages.push(publish_package(ws, opts)?),
         None => {
             for member in ws.members() {
                 let pkg_ws = Workspace::new(member.manifest_path(), ws.config())?;
-                publish(&pkg_ws, opts)?;
+                packages.push(publish_package(&pkg_ws, opts)?);
             }
-            Ok(())
         }
-    }
+    };
+
+    // Upload only at the end and only if all tarballs elaborated correctly
+    for (package, lock) in packages {
+        upload_package(&package, &lock, opts)?
+    };
+
+    Ok(())
 }
 
-fn publish_package(ws: &Workspace, opts: &PublishOpts) -> CargoResult<()> {
+fn publish_package(ws: &Workspace, opts: &PublishOpts) -> CargoResult<(Package, FileLock)> {
     let pkg = ws.current()?;
 
     if let Some(ref allowed_registries) = *pkg.publish() {
@@ -73,7 +83,7 @@ fn publish_package(ws: &Workspace, opts: &PublishOpts) -> CargoResult<()> {
         bail!("published crates cannot contain [patch] sections");
     }
 
-    let (mut registry, reg_id) = registry(
+    let (_, reg_id) = registry(
         opts.config,
         opts.token.clone(),
         opts.index.clone(),
@@ -97,6 +107,19 @@ fn publish_package(ws: &Workspace, opts: &PublishOpts) -> CargoResult<()> {
         },
     )?.unwrap();
 
+    Ok((pkg.clone(), tarball))
+}
+
+
+fn upload_package(pkg: &Package, tarball: &FileLock, opts: &PublishOpts) -> CargoResult<()> {
+
+    let (mut registry, reg_id) = registry(
+        opts.config,
+        opts.token.clone(),
+        opts.index.clone(),
+        opts.registry.clone(),
+    )?;
+
     // Upload said tarball to the specified destination
     opts.config
         .shell()
@@ -114,6 +137,7 @@ fn publish_package(ws: &Workspace, opts: &PublishOpts) -> CargoResult<()> {
 }
 
 fn verify_dependencies(pkg: &Package, registry_src: &SourceId) -> CargoResult<()> {
+
     for dep in pkg.dependencies().iter() {
         if dep.source_id().is_path() {
             if !dep.specified_req() {
